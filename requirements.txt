@@ -1,0 +1,7 @@
+# SkimGuard off-device tooling (simulator + evaluation + figures).
+# The on-device .fap needs none of this — only ufbt (see build/BUILD.md).
+numpy>=1.24
+matplotlib>=3.7
+
+# Dev / test only:
+pytest>=7.0

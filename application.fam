@@ -1,0 +1,22 @@
+# SkimGuard — Flipper application manifest.
+# Author / sole contributor: Krishita Sanjay Choksi.
+# SPDX-License-Identifier: MIT
+
+App(
+    appid="skimguard",
+    name="SkimGuard",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="skimguard_app",
+    stack_size=2 * 1024,
+    fap_category="NFC",
+    fap_author="Krishita Sanjay Choksi",
+    fap_version="1.0",
+    fap_description=(
+        "Passive 13.56 MHz NFC reader (skimmer) field detector. "
+        "Receive-only: it senses the RF field an active reader emits and never "
+        "transmits. EMF-style meter, geiger clicks, A/B and watch modes."
+    ),
+    sources=["src/*.c"],
+    # No fap_icon: uses the default category icon. Add one under src/ and set
+    # fap_icon="icon.png" if you want custom art.
+)

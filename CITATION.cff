@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use SkimGuard, please cite it as below."
+title: "SkimGuard: a passive 13.56 MHz NFC reader (skimmer) detector for Flipper Zero"
+abstract: >-
+  SkimGuard passively detects powered 13.56 MHz NFC readers by sensing the RF
+  field they emit, without ever transmitting. It provides an EMF-style meter
+  with accelerating geiger clicks, a clean-vs-compromised A/B mode, a watch
+  mode, and an off-device measurement/evaluation pipeline (detection range,
+  false-positive rate, field-strength-vs-distance). It is an independent
+  implementation of the passive reader-field-detection approach popularized by
+  the open-source Specter project, with an added measurement layer and a
+  physical-security-control framing.
+type: software
+authors:
+  - family-names: "Choksi"
+    given-names: "Krishita Sanjay"
+license: MIT
+version: "1.0"
+date-released: "2026-01-01"
+keywords:
+  - flipper-zero
+  - nfc
+  - skimmer-detection
+  - rfid
+  - physical-security
+  - defensive-security

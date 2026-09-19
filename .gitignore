@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Flipper / ufbt build artifacts
+.ufbt/
+dist/
+*.fap
+build/*.fap
+build/dist/
+
+# Host C test binary
+sg_test
+*.o
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

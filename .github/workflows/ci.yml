@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: C unit tests (firmware detection logic)
+        run: |
+          cc -std=c11 -Wall -Wextra -DSKIMGUARD_SIM -Isrc -o sg_test tests/test_detector.c -lm
+          ./sg_test
+
+      - name: Python tests
+        run: python -m pytest tests/test_python.py -q
+
+      - name: Regenerate sample data (must not error)
+        run: python -m sim.generate_samples
+
+      - name: Run evaluation + figures (must not error)
+        run: |
+          python -m eval.run_eval --seed 7
+          python -m eval.make_diagrams
+
+      - name: Upload figures
+        uses: actions/upload-artifact@v4
+        with:
+          name: figures
+          path: figures/
