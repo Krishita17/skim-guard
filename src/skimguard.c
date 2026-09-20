@@ -2,35 +2,52 @@
  * SkimGuard — passive 13.56 MHz NFC reader (skimmer) detector for Flipper Zero.
  *
  * Receive-only: senses the RF field an active reader can't help but emit and
- * turns it into an EMF-style meter with accelerating geiger clicks, a room
- * verdict, an A/B (clean vs compromised) booth mode, and a watch/alert mode.
+ * turns it into an EMF-style meter, a live waveform, accelerating geiger
+ * clicks, peak-hold, haptic + LED feedback, a room verdict, an A/B (clean vs
+ * compromised) mode, a watch/alert sentry mode, and SD-card session logging.
  * It NEVER transmits.
+ *
+ * The passive reader-field-detection approach is credited to the open-source
+ * Specter project by at0m-b0mb (see README / docs/prior_art.md). This is an
+ * independent implementation with an added measurement/evaluation layer.
  *
  * Author / sole contributor: Krishita Sanjay Choksi.
  * SPDX-License-Identifier: MIT
  */
 #include <furi.h>
+#include <furi_hal_speaker.h>
+#include <furi_hal_vibro.h>
+#include <furi_hal_light.h>
 #include <gui/gui.h>
 #include <input/input.h>
-#include <furi_hal_speaker.h>
 #include <math.h>
 #include <stdio.h>
 
 #include "skimguard_config.h"
 #include "detection.h"
 #include "field_sensor.h"
+#include "logger.h"
+
+#define WAVE_N 60u /* waveform history samples (~3 s at 20 Hz) */
 
 typedef enum {
-    ModeSweep = 0, /* free-hand hunt: meter + clicks */
+    ModeSweep = 0, /* free-hand hunt: waveform + meter + clicks */
     ModeAB, /* guided clean-vs-compromised */
     ModeWatch, /* armed sentry: alert if a reader appears */
     ModeCount,
 } SgMode;
 
 typedef enum {
-    AbStepClean = 0, /* sweep the known-clean terminal first */
-    AbStepCompromised, /* now sweep the suspect one */
+    AbStepClean = 0,
+    AbStepCompromised,
 } AbStep;
+
+typedef enum {
+    FbMute = 0, /* screen + LED-clear only */
+    FbSound, /* + geiger clicks */
+    FbFull, /* + haptic + proportional LED */
+    FbCount,
+} FeedbackLevel;
 
 typedef struct {
     FuriMutex* mutex;
@@ -38,6 +55,7 @@ typedef struct {
     ViewPort* view_port;
     Gui* gui;
     FuriTimer* timer;
+    Logger* logger;
 
     Detector detector;
     DetectionResult result;
@@ -46,10 +64,18 @@ typedef struct {
     AbStep ab_step;
     bool ab_clean_seen_quiet;
 
-    bool sound_on;
+    FeedbackLevel feedback;
     bool speaker_held;
     float click_accum_ms;
-    int click_hold_ticks; /* >0 while a click tone is sounding */
+    int click_hold_ticks;
+
+    /* waveform ring buffer of proximity (0..100) */
+    uint8_t wave[WAVE_N];
+    uint16_t wave_len;
+    uint16_t wave_head;
+    float peak_prox;
+
+    float elapsed_s; /* for log timestamps */
 
     bool watch_armed;
     bool watch_alerted;
@@ -58,35 +84,79 @@ typedef struct {
 } SkimGuard;
 
 /* ------------------------------------------------------------------ */
-/* Sound                                                               */
+/* Feedback: speaker, haptic, LED                                      */
 /* ------------------------------------------------------------------ */
-static void sound_acquire(SkimGuard* sg) {
-    if(sg->sound_on && !sg->speaker_held) {
-        if(furi_hal_speaker_acquire(30)) {
-            sg->speaker_held = true;
-        }
-    }
-}
-
-static void sound_release(SkimGuard* sg) {
-    if(sg->speaker_held) {
+static void speaker_sync(SkimGuard* sg) {
+    bool want = (sg->feedback >= FbSound);
+    if(want && !sg->speaker_held) {
+        if(furi_hal_speaker_acquire(30)) sg->speaker_held = true;
+    } else if(!want && sg->speaker_held) {
         furi_hal_speaker_stop();
         furi_hal_speaker_release();
         sg->speaker_held = false;
     }
 }
 
-static void click_start(SkimGuard* sg, float proximity_pct) {
-    if(!sg->speaker_held) return;
-    /* Higher pitch as you close in — the geiger effect. */
-    float freq = 1800.0f + 2600.0f * (proximity_pct / 100.0f);
-    furi_hal_speaker_start(freq, 0.5f);
-    sg->click_hold_ticks = 1; /* one sample period */
+static void led_off(void) {
+    furi_hal_light_set(LightRed, 0);
+    furi_hal_light_set(LightGreen, 0);
+    furi_hal_light_set(LightBlue, 0);
 }
 
-static void click_stop(SkimGuard* sg) {
+static void led_update(SkimGuard* sg, const DetectionResult* r) {
+    if(sg->feedback < FbFull) {
+        led_off();
+        return;
+    }
+    if(r->present) {
+        uint8_t v = (uint8_t)(r->proximity_pct * 2.55f);
+        furi_hal_light_set(LightRed, v);
+        furi_hal_light_set(LightGreen, 0);
+    } else {
+        /* calm green = "clear / listening" */
+        furi_hal_light_set(LightRed, 0);
+        furi_hal_light_set(LightGreen, 12);
+    }
+    furi_hal_light_set(LightBlue, 0);
+}
+
+static void pulse_start(SkimGuard* sg, float proximity_pct) {
+    if(sg->speaker_held) {
+        float freq = 1800.0f + 2600.0f * (proximity_pct / 100.0f);
+        furi_hal_speaker_start(freq, 0.5f);
+    }
+    if(sg->feedback >= FbFull) furi_hal_vibro_on(true);
+    sg->click_hold_ticks = 1;
+}
+
+static void pulse_stop(SkimGuard* sg) {
     if(sg->speaker_held) furi_hal_speaker_stop();
+    furi_hal_vibro_on(false);
     sg->click_hold_ticks = 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Waveform + peak                                                     */
+/* ------------------------------------------------------------------ */
+static void wave_push(SkimGuard* sg, float proximity_pct) {
+    uint8_t v = (uint8_t)(proximity_pct + 0.5f);
+    if(sg->wave_len < WAVE_N) {
+        sg->wave[(sg->wave_head + sg->wave_len) % WAVE_N] = v;
+        sg->wave_len++;
+    } else {
+        sg->wave[sg->wave_head] = v;
+        sg->wave_head = (sg->wave_head + 1) % WAVE_N;
+    }
+    if(proximity_pct > sg->peak_prox) sg->peak_prox = proximity_pct;
+}
+
+static void reset_session(SkimGuard* sg) {
+    detector_init(&sg->detector);
+    sg->wave_len = 0;
+    sg->wave_head = 0;
+    sg->peak_prox = 0.0f;
+    sg->watch_alerted = false;
+    sg->ab_clean_seen_quiet = false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -102,34 +172,35 @@ static void sample_cb(void* ctx) {
     detector_push(&sg->detector, (float)raw, &r);
     sg->result = r;
 
-    /* Watch mode: latch an alert the first time a reader appears. */
-    if(sg->mode == ModeWatch && sg->watch_armed && r.present) {
-        sg->watch_alerted = true;
+    sg->elapsed_s += (float)SG_SAMPLE_PERIOD_MS / 1000.0f;
+    wave_push(sg, r.proximity_pct);
+
+    if(logger_is_active(sg->logger)) {
+        logger_write(sg->logger, sg->elapsed_s, raw, r.proximity_pct, r.present);
     }
 
-    /* A/B mode: remember that the clean terminal read quiet. */
-    if(sg->mode == ModeAB && sg->ab_step == AbStepClean && !r.present) {
-        sg->ab_clean_seen_quiet = true;
-    }
+    if(sg->mode == ModeWatch && sg->watch_armed && r.present) sg->watch_alerted = true;
+    if(sg->mode == ModeAB && sg->ab_step == AbStepClean && !r.present) sg->ab_clean_seen_quiet = true;
 
-    /* Click cadence. */
+    /* end a pulse that has run its hold time */
     if(sg->click_hold_ticks > 0) {
         sg->click_hold_ticks--;
-        if(sg->click_hold_ticks == 0) click_stop(sg);
+        if(sg->click_hold_ticks == 0) pulse_stop(sg);
     }
-    bool clicky = sg->sound_on && r.present && isfinite(r.click_ms);
-    /* In watch mode we chirp only when alerted; otherwise it would be a
-     * silent sentry. */
+
+    bool clicky = (sg->feedback >= FbSound) && r.present && isfinite(r.click_ms);
     if(sg->mode == ModeWatch) clicky = clicky && sg->watch_alerted;
     if(clicky) {
         sg->click_accum_ms += (float)SG_SAMPLE_PERIOD_MS;
         if(sg->click_accum_ms >= r.click_ms) {
             sg->click_accum_ms = 0.0f;
-            click_start(sg, r.proximity_pct);
+            pulse_start(sg, r.proximity_pct);
         }
     } else {
         sg->click_accum_ms = 0.0f;
     }
+
+    led_update(sg, &r);
 
     furi_mutex_release(sg->mutex);
     view_port_update(sg->view_port);
@@ -151,70 +222,114 @@ static const char* mode_name(SgMode m) {
     }
 }
 
-static void draw_meter(Canvas* c, int x, int y, int w, int h, float pct) {
+static const char* feedback_tag(FeedbackLevel f) {
+    switch(f) {
+    case FbMute:
+        return "mute";
+    case FbSound:
+        return "snd";
+    case FbFull:
+        return "snd+led";
+    default:
+        return "?";
+    }
+}
+
+static void draw_meter(Canvas* c, int x, int y, int w, int h, float pct, float peak) {
     canvas_draw_frame(c, x, y, w, h);
     int fill = (int)((w - 2) * (pct / 100.0f));
     if(fill > 0) canvas_draw_box(c, x + 1, y + 1, fill, h - 2);
+    /* peak-hold tick */
+    int px = x + 1 + (int)((w - 2) * (peak / 100.0f));
+    if(px > x + 1 && px < x + w - 1) canvas_draw_line(c, px, y - 1, px, y + h);
 }
 
-static void draw_sweep(Canvas* c, const DetectionResult* r) {
-    char line[40];
+static void draw_waveform(Canvas* c, const SkimGuard* sg, int x, int y, int w, int h) {
+    /* baseline */
+    canvas_draw_line(c, x, y + h, x + w, y + h);
+    if(sg->wave_len < 2) return;
+    int step_num = w;
+    for(uint16_t i = 0; i < sg->wave_len; i++) {
+        uint8_t v = sg->wave[(sg->wave_head + i) % WAVE_N];
+        int px = x + (int)((long)i * step_num / (sg->wave_len - 1));
+        int ph = (int)(h * (v / 100.0f));
+        canvas_draw_line(c, px, y + h - ph, px, y + h);
+    }
+}
+
+static void draw_flags(Canvas* c, const SkimGuard* sg, const char* extra) {
+    char buf[40];
+    snprintf(
+        buf,
+        sizeof(buf),
+        "%s%s pk%d%%%s%s",
+        feedback_tag(sg->feedback),
+        logger_is_active(sg->logger) ? " LOG" : "",
+        (int)(sg->peak_prox + 0.5f),
+        extra && extra[0] ? " " : "",
+        extra ? extra : "");
+    canvas_set_font(c, FontSecondary);
+    canvas_draw_str(c, 2, 63, buf);
+}
+
+static void draw_sweep(Canvas* c, const SkimGuard* sg, const DetectionResult* r) {
+    char line[28];
     canvas_set_font(c, FontSecondary);
 
     if(!r->present) {
-        canvas_draw_str(c, 4, 26, "CLEAR - no reader field");
+        canvas_draw_str(c, 2, 23, "CLEAR - no reader field");
     } else {
         const char* tr = r->trend == SgTrendWarmer ? "warmer >>>" :
                          r->trend == SgTrendColder ? "<<< colder" :
                                                      "holding";
         snprintf(line, sizeof(line), "READER  %s", tr);
-        canvas_set_font(c, FontPrimary);
-        canvas_draw_str(c, 4, 24, "READER NEAR");
-        canvas_set_font(c, FontSecondary);
-        canvas_draw_str(c, 4, 35, tr);
+        canvas_draw_str(c, 2, 23, line);
     }
-
-    draw_meter(c, 4, 40, 120, 12, r->proximity_pct);
-
     snprintf(line, sizeof(line), "%d%%", (int)(r->proximity_pct + 0.5f));
-    canvas_draw_str_aligned(c, 124, 62, AlignRight, AlignBottom, line);
+    canvas_draw_str_aligned(c, 126, 23, AlignRight, AlignBottom, line);
+
+    draw_waveform(c, sg, 2, 26, 124, 14);
+    draw_meter(c, 2, 43, 124, 10, r->proximity_pct, sg->peak_prox);
 
     const char* ch = r->characterization == SgCharSteady        ? "steady" :
-                     r->characterization == SgCharIntermittent ? "intermittent" :
+                     r->characterization == SgCharIntermittent ? "intermit" :
                                                                   "";
-    if(ch[0]) canvas_draw_str(c, 4, 62, ch);
+    draw_flags(c, sg, ch);
 }
 
 static void draw_ab(Canvas* c, const SkimGuard* sg, const DetectionResult* r) {
     canvas_set_font(c, FontSecondary);
     if(sg->ab_step == AbStepClean) {
-        canvas_draw_str(c, 4, 24, "Step 1: sweep CLEAN box");
-        canvas_draw_str(c, 4, 35, r->present ? "hmm - field here?!" : "quiet - good baseline");
+        canvas_draw_str(c, 2, 23, "Step 1: sweep CLEAN box");
+        canvas_draw_str(c, 2, 34, r->present ? "field here?! recheck" : "quiet - good baseline");
     } else {
-        canvas_draw_str(c, 4, 24, "Step 2: sweep SUSPECT box");
-        canvas_draw_str(c, 4, 35, r->present ? "READER FOUND" : "sweeping...");
+        canvas_draw_str(c, 2, 23, "Step 2: sweep SUSPECT box");
+        canvas_draw_str(c, 2, 34, r->present ? "READER FOUND" : "sweeping...");
     }
-    draw_meter(c, 4, 40, 120, 12, r->proximity_pct);
-    canvas_draw_str(c, 4, 62, "OK: next step");
+    draw_meter(c, 2, 40, 124, 10, r->proximity_pct, sg->peak_prox);
+    canvas_draw_str(c, 2, 63, "OK:next step");
+    char pk[16];
+    snprintf(pk, sizeof(pk), "pk%d%%", (int)(sg->peak_prox + 0.5f));
+    canvas_draw_str_aligned(c, 126, 63, AlignRight, AlignBottom, pk);
 }
 
 static void draw_watch(Canvas* c, const SkimGuard* sg, const DetectionResult* r) {
     canvas_set_font(c, FontPrimary);
     if(sg->watch_alerted) {
-        canvas_draw_str(c, 4, 24, "! READER DETECTED");
+        canvas_draw_str(c, 2, 26, "! READER DETECTED");
         canvas_set_font(c, FontSecondary);
-        canvas_draw_str(c, 4, 36, "a reader appeared while armed");
+        canvas_draw_str(c, 2, 38, "appeared while armed");
     } else if(sg->watch_armed) {
-        canvas_draw_str(c, 4, 24, "ARMED - watching");
+        canvas_draw_str(c, 2, 26, "ARMED - watching");
         canvas_set_font(c, FontSecondary);
-        canvas_draw_str(c, 4, 36, "silent until a reader shows");
+        canvas_draw_str(c, 2, 38, "silent until a reader shows");
     } else {
-        canvas_draw_str(c, 4, 24, "Watch idle");
+        canvas_draw_str(c, 2, 26, "Watch idle");
         canvas_set_font(c, FontSecondary);
-        canvas_draw_str(c, 4, 36, "OK: arm sentry");
+        canvas_draw_str(c, 2, 38, "OK: arm sentry");
     }
-    draw_meter(c, 4, 44, 120, 10, r->proximity_pct);
-    (void)r;
+    draw_meter(c, 2, 43, 124, 8, r->proximity_pct, sg->peak_prox);
+    draw_flags(c, sg, sg->watch_armed ? "armed" : "idle");
 }
 
 static void draw_cb(Canvas* canvas, void* ctx) {
@@ -222,26 +337,21 @@ static void draw_cb(Canvas* canvas, void* ctx) {
     furi_mutex_acquire(sg->mutex, FuriWaitForever);
     DetectionResult r = sg->result;
     SgMode mode = sg->mode;
-    bool sound = sg->sound_on;
     furi_mutex_release(sg->mutex);
 
     canvas_clear(canvas);
 
-    /* Header */
     canvas_set_font(canvas, FontPrimary);
     canvas_draw_str(canvas, 2, 11, "SkimGuard");
     canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str_aligned(canvas, 126, 10, AlignRight, AlignBottom, mode_name(mode));
-    if(sound) canvas_draw_str(canvas, 82, 10, "snd");
+    canvas_draw_str_aligned(canvas, 126, 11, AlignRight, AlignBottom, mode_name(mode));
     canvas_draw_line(canvas, 0, 13, 128, 13);
 
-    if(field_sensor_is_simulated()) {
-        canvas_draw_str(canvas, 2, 62, "SIM");
-    }
+    if(field_sensor_is_simulated()) canvas_draw_str(canvas, 74, 11, "SIM");
 
     switch(mode) {
     case ModeSweep:
-        draw_sweep(canvas, &r);
+        draw_sweep(canvas, sg, &r);
         break;
     case ModeAB:
         draw_ab(canvas, sg, &r);
@@ -262,14 +372,19 @@ static void input_cb(InputEvent* event, void* ctx) {
     furi_message_queue_put(sg->input_queue, event, FuriWaitForever);
 }
 
-static void recalibrate(SkimGuard* sg) {
-    detector_init(&sg->detector);
-    sg->watch_alerted = false;
-    sg->ab_clean_seen_quiet = false;
+static void toggle_logging(SkimGuard* sg) {
+    if(logger_is_active(sg->logger)) {
+        logger_stop(sg->logger);
+    } else {
+        sg->elapsed_s = 0.0f;
+        logger_start(sg->logger); /* silently no-ops in UI if it fails */
+    }
 }
 
 static void handle_input(SkimGuard* sg, const InputEvent* e) {
-    if(e->type != InputTypeShort && e->type != InputTypeLong) return;
+    bool is_short = (e->type == InputTypeShort);
+    bool is_long = (e->type == InputTypeLong);
+    if(!is_short && !is_long) return;
 
     furi_mutex_acquire(sg->mutex, FuriWaitForever);
     switch(e->key) {
@@ -277,14 +392,16 @@ static void handle_input(SkimGuard* sg, const InputEvent* e) {
         sg->running = false;
         break;
     case InputKeyOk:
-        if(sg->mode == ModeAB) {
+        if(is_long) {
+            reset_session(sg); /* fresh baseline + clear peak/waveform */
+        } else if(sg->mode == ModeAB) {
             sg->ab_step = (sg->ab_step == AbStepClean) ? AbStepCompromised : AbStepClean;
             sg->click_accum_ms = 0.0f;
         } else if(sg->mode == ModeWatch) {
             sg->watch_armed = !sg->watch_armed;
             sg->watch_alerted = false;
         } else {
-            recalibrate(sg); /* fresh baseline for this spot */
+            reset_session(sg);
         }
         break;
     case InputKeyLeft:
@@ -296,12 +413,15 @@ static void handle_input(SkimGuard* sg, const InputEvent* e) {
         sg->click_accum_ms = 0.0f;
         break;
     case InputKeyUp:
+        sg->feedback = (FeedbackLevel)((sg->feedback + 1) % FbCount);
+        speaker_sync(sg);
+        if(sg->feedback < FbFull) {
+            furi_hal_vibro_on(false);
+            led_off();
+        }
+        break;
     case InputKeyDown:
-        sg->sound_on = !sg->sound_on;
-        if(sg->sound_on)
-            sound_acquire(sg);
-        else
-            sound_release(sg);
+        toggle_logging(sg);
         break;
     default:
         break;
@@ -318,8 +438,9 @@ static SkimGuard* skimguard_alloc(void) {
 
     sg->mutex = furi_mutex_alloc(FuriMutexTypeNormal);
     sg->input_queue = furi_message_queue_alloc(8, sizeof(InputEvent));
+    sg->logger = logger_alloc();
     sg->mode = ModeSweep;
-    sg->sound_on = true;
+    sg->feedback = FbSound;
     sg->running = true;
 
     detector_init(&sg->detector);
@@ -338,7 +459,15 @@ static SkimGuard* skimguard_alloc(void) {
 static void skimguard_free(SkimGuard* sg) {
     furi_timer_stop(sg->timer);
     furi_timer_free(sg->timer);
-    sound_release(sg);
+
+    if(sg->speaker_held) {
+        furi_hal_speaker_stop();
+        furi_hal_speaker_release();
+    }
+    furi_hal_vibro_on(false);
+    led_off();
+
+    logger_free(sg->logger);
 
     gui_remove_view_port(sg->gui, sg->view_port);
     furi_record_close(RECORD_GUI);
@@ -354,11 +483,10 @@ int32_t skimguard_app(void* p) {
     SkimGuard* sg = skimguard_alloc();
 
     if(!field_sensor_init()) {
-        /* Could not enter receive-only posture; bail cleanly. */
         skimguard_free(sg);
         return -1;
     }
-    if(sg->sound_on) sound_acquire(sg);
+    speaker_sync(sg);
 
     furi_timer_start(sg->timer, furi_ms_to_ticks(SG_SAMPLE_PERIOD_MS));
 

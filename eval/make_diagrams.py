@@ -86,42 +86,65 @@ def _screen(ax, title):
     return ink
 
 
-def _meter(ax, ink, x, y, w, h, fill_frac):
+def _meter(ax, ink, x, y, w, h, fill_frac, peak_frac=None):
     ax.add_patch(plt.Rectangle((x, y), w, h, fill=False, edgecolor=ink, linewidth=1.2))
     ax.add_patch(plt.Rectangle((x + 1, y + 1), (w - 2) * fill_frac, h - 2,
                                facecolor=ink, edgecolor="none"))
+    if peak_frac is not None:
+        px = x + 1 + (w - 2) * peak_frac
+        ax.plot([px, px], [y - 2, y + h + 2], color=ink, lw=1.4)
+
+
+def _waveform(ax, ink, x, y, w, h, samples):
+    ax.plot([x, x + w], [y + h, y + h], color=ink, lw=0.8)  # baseline
+    n = len(samples)
+    for i, v in enumerate(samples):
+        px = x + (w * i / max(1, n - 1))
+        ax.plot([px, px], [y + h, y + h - h * v], color=ink, lw=1.0)
+
+
+def _header(ax, ink, mode):
+    ax.text(4, 11, "SkimGuard", fontsize=9.5, color=ink, fontweight="bold")
+    ax.text(124, 11, mode, fontsize=8, color=ink, ha="right")
+    ax.plot([0, 128], [14, 14], color=ink, lw=0.8)
 
 
 def ui_states():
+    import numpy as np
     paths = []
+
     # 1) Idle / quiet
     fig, ax = plt.subplots(figsize=(3.2, 1.9))
     ink = _screen(ax, "State: idle — no reader field")
-    ax.text(4, 12, "SkimGuard", fontsize=10, color=ink, fontweight="bold")
-    ax.text(4, 26, "Listening (passive)", fontsize=7.5, color=ink)
-    _meter(ax, ink, 4, 34, 120, 12, 0.04)
-    ax.text(4, 58, "CLEAR", fontsize=9, color=ink, fontweight="bold")
-    ax.text(120, 58, "0%", fontsize=8, color=ink, ha="right")
+    _header(ax, ink, "Sweep")
+    ax.text(4, 24, "CLEAR - no reader field", fontsize=7.5, color=ink)
+    ax.text(124, 24, "0%", fontsize=8, color=ink, ha="right")
+    _waveform(ax, ink, 4, 27, 120, 12, [0.02] * 30)
+    _meter(ax, ink, 4, 43, 120, 9, 0.03)
+    ax.text(4, 61, "mute pk0%", fontsize=7, color=ink)
     paths += plots.save(fig, FIG_DIR, "ui_idle")
 
     # 2) Locked on
     fig, ax = plt.subplots(figsize=(3.2, 1.9))
     ink = _screen(ax, "State: locked on — closing in")
-    ax.text(4, 12, "READER NEAR", fontsize=10, color=ink, fontweight="bold")
-    ax.text(4, 26, "warmer >>>", fontsize=7.5, color=ink)
-    _meter(ax, ink, 4, 34, 120, 12, 0.78)
-    ax.text(4, 58, "click click click", fontsize=7.5, color=ink)
-    ax.text(120, 58, "78%", fontsize=9, color=ink, ha="right", fontweight="bold")
+    _header(ax, ink, "Sweep")
+    ax.text(4, 24, "READER  warmer >>>", fontsize=7.5, color=ink, fontweight="bold")
+    ax.text(124, 24, "78%", fontsize=8, color=ink, ha="right", fontweight="bold")
+    x = np.linspace(0, 1, 30)
+    wave = 0.15 + 0.7 * x + 0.05 * np.sin(x * 22)
+    _waveform(ax, ink, 4, 27, 120, 12, np.clip(wave, 0, 1))
+    _meter(ax, ink, 4, 43, 120, 9, 0.78, peak_frac=0.82)
+    ax.text(4, 61, "snd+led LOG pk82% steady", fontsize=6.3, color=ink)
     paths += plots.save(fig, FIG_DIR, "ui_locked")
 
-    # 3) Verdict
+    # 3) Verdict / watch alert
     fig, ax = plt.subplots(figsize=(3.2, 1.9))
-    ink = _screen(ax, "State: verdict")
-    ax.text(4, 12, "READER PRESENT", fontsize=9.5, color=ink, fontweight="bold")
-    ax.text(4, 27, "field: steady", fontsize=8, color=ink)
-    ax.text(4, 39, "est. very close", fontsize=8, color=ink)
-    _meter(ax, ink, 4, 45, 120, 10, 0.9)
-    ax.text(4, 62, "OK=recalibrate", fontsize=7, color=ink)
+    ink = _screen(ax, "State: watch alert")
+    _header(ax, ink, "Watch")
+    ax.text(4, 26, "! READER DETECTED", fontsize=9, color=ink, fontweight="bold")
+    ax.text(4, 37, "appeared while armed", fontsize=7.5, color=ink)
+    _meter(ax, ink, 4, 42, 120, 8, 0.9, peak_frac=0.94)
+    ax.text(4, 61, "snd+led pk94% armed", fontsize=7, color=ink)
     paths += plots.save(fig, FIG_DIR, "ui_verdict")
 
     return paths

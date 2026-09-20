@@ -15,8 +15,8 @@ authors:
   - family-names: "Choksi"
     given-names: "Krishita Sanjay"
 license: MIT
-version: "1.0"
-date-released: "2026-01-01"
+version: "1.1"
+date-released: "2026-09-19"
 keywords:
   - flipper-zero
   - nfc

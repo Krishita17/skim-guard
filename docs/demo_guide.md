@@ -148,8 +148,10 @@ get a hint from scuff marks or a shifted box.
 | Button | Action |
 |---|---|
 | Left / Right | switch mode: Sweep · A/B · Watch |
-| OK | Sweep: recalibrate here · A/B: next step · Watch: arm/disarm |
-| Up / Down | toggle click sound |
+| OK (short) | Sweep: recalibrate here · A/B: next step · Watch: arm/disarm |
+| OK (long) | reset session (fresh baseline, clear peak-hold + waveform) |
+| Up | cycle feedback: mute → snd → snd+led (sound / haptic / LED) |
+| Down | toggle SD session logging |
 | Back | exit |
 
 ---

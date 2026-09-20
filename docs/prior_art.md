@@ -7,6 +7,13 @@ project for the Flipper Zero. SkimGuard is an **independent implementation** of
 that approach, and this document exists so nobody has to guess where the line
 is between "borrowed idea" and "own work."
 
+**The reference project:** [Specter-FlipperZero](https://github.com/at0m-b0mb/Specter-FlipperZero),
+created by **at0m-b0mb (@at0m-b0mb)**, MIT-licensed, tagline *"Sweep for the
+readers you can't see."* Credit for demonstrating the passive
+reader-field-detection approach on Flipper Zero hardware — and for much of the
+on-device experience SkimGuard reaches parity with (EMF meter, peak-hold,
+waveform, haptic/LED feedback, watch mode) — belongs to that project.
+
 ## What is prior art here
 
 The core principle — *a reader that is powered on is continuously emitting a

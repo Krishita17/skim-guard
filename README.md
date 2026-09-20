@@ -19,9 +19,12 @@ no other contributors.
 
 SkimGuard does **not** invent the technique it uses. Passively detecting a
 powered 13.56 MHz reader by sensing its field is an established idea, most
-visibly implemented by the open-source **Specter** project for the Flipper Zero.
-SkimGuard is an **independent implementation** of that approach, with two things
-added on top:
+visibly implemented by the open-source **[Specter](https://github.com/at0m-b0mb/Specter-FlipperZero)**
+project for the Flipper Zero, created by **at0m-b0mb (@at0m-b0mb)** and released
+under the MIT license — tagline *"Sweep for the readers you can't see."* Full
+credit for the passive reader-field-detection approach on this hardware belongs
+to that project. SkimGuard is an **independent implementation** of that
+approach, with two things added on top:
 
 1. a **measurement / evaluation layer** (detection range, false-positive rate,
    field-strength-vs-distance — all code-generated and reproducible), and
@@ -42,6 +45,62 @@ emits that field continuously, whether or not a card is present. SkimGuard is a
 warmer/colder meter so you can locate a hidden reader **without transmitting
 anything yourself**. Detecting rogue readers is a real physical-security control
 (see [Physical-security relevance](#physical-security-relevance)).
+
+---
+
+## Features
+
+**On-device (`.fap`)**
+- **Passive field sensing** at 13.56 MHz — receive-only, never transmits.
+- **EMF-style meter** with a **peak-hold** tick marking the strongest reading.
+- **Live waveform** strip showing the last few seconds of proximity.
+- **Accelerating geiger clicks** — the click rate rises as you close in.
+- **Three feedback levels** (cycle with Up): `mute` → `snd` → `snd+led`
+  (sound **+ haptic vibration + proportional LED**: green = clear, red brightens
+  toward the reader).
+- **Warmer/colder trend** and **steady-vs-intermittent** field characterization.
+- **Three modes** (Left/Right):
+  - **Sweep** — free-hand hunt with waveform, meter, and clicks.
+  - **A/B** — guided *clean box → suspect box* comparison for a decisive contrast.
+  - **Watch** — armed sentry that alerts on wake-on-detection while unattended.
+- **SD-card session logging** (toggle with Down) that writes the **exact CSV
+  schema the offline evaluation uses**, so a capture on the device drops straight
+  into `sim/`+`eval/` with no conversion.
+- **Simulator build** (`-DSKIMGUARD_SIM`) for a hardware-free demo/backup.
+
+**Off-device (this repo)**
+- **Reproducible measurement study**: detection range, false-positive rate,
+  field-vs-distance — all seeded and code-generated.
+- **Hardware-free simulator** + a **Python reference detector that mirrors the
+  firmware**, with **unit tests and CI**.
+
+---
+
+## What's new & how this differs from Specter
+
+SkimGuard shares Specter's core idea, and by design some features reach *parity*
+with it. Being explicit about which is which:
+
+| Capability | Specter (at0m-b0mb) | SkimGuard | Note |
+|---|---|---|---|
+| Passive 13.56 MHz field detection | yes | yes | shared core technique — credited |
+| EMF meter + accelerating clicks | yes | yes | parity, independently implemented |
+| Peak-hold indicator | yes | yes | parity |
+| Live waveform | yes | yes | parity |
+| Haptic + LED + sound feedback | yes | yes | parity (3-level cycle) |
+| Watch / wake-on-detection mode | yes | yes | parity |
+| Steady vs intermittent characterization | yes (fingerprint) | yes (lighter) | parity-ish |
+| **Guided A/B (clean vs compromised) mode** | — | yes | **SkimGuard's own** |
+| **SD logs in the offline-eval CSV schema** | CSV export | yes, schema-matched | **feeds the study directly** |
+| **Reproducible measurement study + charts** | — | yes | **SkimGuard's differentiator** |
+| **Simulator + firmware-mirroring detector + tests/CI** | — | yes | **SkimGuard's differentiator** |
+| **Physical-security control mapping (NIST/PCI)** | — | yes | **SkimGuard's framing** |
+
+**Changelog:** see [`CHANGELOG.md`](CHANGELOG.md). The honest one-line framing:
+*an independent implementation of Specter's approach, brought to feature parity
+on device and extended with an evaluation/reproducibility layer, a guided A/B
+mode, and a compliance framing.* It does **not** claim novelty over the
+detection technique — full positioning in [`docs/prior_art.md`](docs/prior_art.md).
 
 ---
 
@@ -96,9 +155,9 @@ Full script, setup, controls, and failure recovery: [`docs/demo_guide.md`](docs/
 
 ### On-device UI states (mockups)
 
-| Idle — clear | Locked on | Verdict |
+| Idle — clear | Locked on (Sweep) | Watch alert |
 |---|---|---|
-| ![idle](figures/ui_idle.png) | ![locked](figures/ui_locked.png) | ![verdict](figures/ui_verdict.png) |
+| ![idle](figures/ui_idle.png) | ![locked](figures/ui_locked.png) | ![watch alert](figures/ui_verdict.png) |
 
 *(These are code-generated mockups of the 128×64 screen, not hardware photos.)*
 
@@ -107,8 +166,10 @@ Full script, setup, controls, and failure recovery: [`docs/demo_guide.md`](docs/
 | Button | Action |
 |---|---|
 | Left / Right | switch mode: **Sweep · A/B · Watch** |
-| OK | Sweep: recalibrate here · A/B: next step · Watch: arm/disarm |
-| Up / Down | toggle click sound |
+| OK (short) | Sweep: recalibrate here · A/B: next step · Watch: arm/disarm |
+| OK (long) | reset session: fresh baseline, clear peak-hold + waveform |
+| Up | cycle feedback: **mute → snd → snd+led** (sound/haptic/LED) |
+| Down | toggle **SD session logging** |
 | Back | exit |
 
 ---
@@ -223,7 +284,8 @@ terminal is safe.
 ```
 skim-guard/
 ├── application.fam          Flipper app manifest
-├── src/                     the .fap: field sensor, signal proc, detection, UI
+├── CHANGELOG.md             version history (what's new per release)
+├── src/                     the .fap: field sensor, detection, UI, SD logger
 ├── sim/                     hardware-free trace simulator (+ CLI)
 ├── eval/                    reference detector, measurement studies, plots
 ├── data/                    synthetic traces + de-identified real-log format
