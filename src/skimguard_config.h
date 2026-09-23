@@ -39,3 +39,29 @@
 #define SG_WINDOW_SAMPLES 40u
 #define SG_INTERMITTENT_LO 0.20f
 #define SG_INTERMITTENT_HI 0.85f
+
+/* Detection confidence: signal expressed in noise-sigmas, scaled to 0..100%.
+ * At SG_CONF_FULL_SIGMA above baseline the confidence reads 100%. */
+#define SG_CONF_FULL_SIGMA 40.0f
+
+/* Approximate (uncalibrated) distance estimate — inverts the same on-axis loop
+ * + saturation model the simulator uses, assuming a NOMINAL reference reader.
+ * It is an estimate for a typical reader, not a calibrated measurement. */
+#define SG_EST_POWER 1.0f
+#define SG_EST_COIL_CM 3.0f
+#define SG_EST_KSAT 0.15f
+#define SG_EST_MAX_CM 40.0f /* clamp: beyond this we report "far/unknown" */
+
+/* Baseline drift auto-compensation: when confidently absent for a sustained
+ * period, slowly re-learn the floor so thermal/environmental drift does not
+ * accumulate into a false positive. Adapts only while absent, and slowly. */
+#define SG_DRIFT_HOLD_SAMPLES 60u /* ~3 s clear before adapting */
+#define SG_DRIFT_RATE 0.01f /* fraction of the gap closed per sample */
+
+/* Poll-rate (cadence) estimation for intermittent emitters. */
+#define SG_POLL_EMA 0.4f
+
+/* Sensitivity presets multiply the noise-relative thresholds. */
+#define SG_SENS_HIGH 0.7f /* trips earlier (noisy-tolerant off) */
+#define SG_SENS_MED 1.0f
+#define SG_SENS_LOW 1.5f

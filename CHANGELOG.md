@@ -4,6 +4,33 @@ All notable changes to SkimGuard. Sole author: Krishita Sanjay Choksi.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.0] — 2026-09-23
+
+Analytical features unique to SkimGuard, implemented in the shared detection
+engine (firmware `src/detection.c` + Python reference `eval/detector.py` in
+lock-step) and covered by tests on both sides.
+
+### Added
+- **Detection-confidence score** — SNR-based (signal in noise-sigmas, scaled
+  0–100%) plus a rolled-up **room verdict**: `CLEAR / TRACE / ACTIVE`.
+- **Approximate distance estimate (cm)** — inverts the on-axis-loop + saturation
+  model against a nominal reference reader; honestly flagged *uncalibrated*.
+  New eval study/figure `distance_estimation` (mean abs. error ≈ 0.5 cm under
+  reader-to-reader variation).
+- **Poll-rate estimation (Hz)** for intermittent emitters, from rising-edge
+  spacing of the presence signal.
+- **Baseline drift auto-compensation** — slowly re-learns the RF floor while
+  clear (after ~3 s) so environmental drift doesn't become a false positive.
+- **Sensitivity presets** — High / Med / Low (long-press **Down**), scaling the
+  noise-relative thresholds.
+- On-device readouts for confidence (`cNN%`), distance (`~Ncm`), poll rate
+  (`X.XHz`), verdict, and sensitivity; UI mockups regenerated.
+
+### Testing
+- +5 host C tests and +5 Python tests for the new features (confidence, distance
+  monotonicity + accuracy-vs-truth, sensitivity thresholds, drift suppression,
+  poll-rate estimate). Totals: **324 C checks, 16 Python tests**.
+
 ## [1.1.0] — 2026-09-19
 
 Feature-parity pass with the reference project ([Specter](https://github.com/at0m-b0mb/Specter-FlipperZero)

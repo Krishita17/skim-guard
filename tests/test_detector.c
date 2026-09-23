@@ -101,6 +101,81 @@ static void test_characterization(void) {
     CHECK(r.characterization == SgCharSteady, "constant field -> steady");
 }
 
+static void test_confidence(void) {
+    printf("test_confidence\n");
+    Detector d;
+    detector_init(&d);
+    detector_force_calibration(&d, 18.0f, 6.0f);
+    DetectionResult r;
+    feed(&d, 18.0f, 40, &r);
+    CHECK(r.confidence_pct < 5.0f, "absent -> ~0 confidence");
+    feed(&d, 700.0f, 40, &r);
+    CHECK(r.confidence_pct > 60.0f, "strong reader -> high confidence");
+}
+
+static void test_distance_estimate(void) {
+    printf("test_distance_estimate\n");
+    bool v_near = false, v_far = false, v_tiny = false;
+    float near = detector_estimate_distance_cm(600.0f, &v_near);
+    float far = detector_estimate_distance_cm(80.0f, &v_far);
+    CHECK(v_near && v_far, "mid-range signals give valid estimates");
+    CHECK(near < far, "stronger signal -> nearer estimate (monotonic)");
+    detector_estimate_distance_cm(1.0f, &v_tiny);
+    CHECK(!v_tiny, "near-zero signal -> invalid (too far to estimate)");
+}
+
+static void test_sensitivity(void) {
+    printf("test_sensitivity\n");
+    Detector lo, hi;
+    detector_init(&lo);
+    detector_init(&hi);
+    detector_force_calibration(&lo, 18.0f, 6.0f);
+    detector_force_calibration(&hi, 18.0f, 6.0f);
+    detector_set_sensitivity(&lo, SG_SENS_LOW);
+    detector_set_sensitivity(&hi, SG_SENS_HIGH);
+    CHECK(
+        detector_on_threshold(&lo) > detector_on_threshold(&hi),
+        "Low sensitivity raises the ON threshold vs High");
+}
+
+static void test_drift_compensation(void) {
+    printf("test_drift_compensation\n");
+    Detector d;
+    detector_init(&d);
+    detector_force_calibration(&d, 18.0f, 6.0f);
+    DetectionResult r;
+    bool ever_present = false;
+    /* Slow environmental rise 18 -> 60 over 400 samples; drift comp must keep
+     * the baseline following so this never reads as a reader. */
+    for(int i = 0; i < 400; i++) {
+        float v = 18.0f + 42.0f * ((float)i / 400.0f);
+        detector_push(&d, v, &r);
+        if(r.present) ever_present = true;
+    }
+    CHECK(!ever_present, "slow baseline drift does not trip a false positive");
+}
+
+static void feed_pattern(Detector* d, DetectionResult* last, int cycles, int on_n, int off_n) {
+    DetectionResult r;
+    for(int c = 0; c < cycles; c++) {
+        for(int i = 0; i < on_n; i++) detector_push(d, 700.0f, &r);
+        for(int i = 0; i < off_n; i++) detector_push(d, 18.0f, &r);
+    }
+    if(last) *last = r;
+}
+
+static void test_poll_rate(void) {
+    printf("test_poll_rate\n");
+    Detector d;
+    detector_init(&d);
+    detector_force_calibration(&d, 18.0f, 6.0f);
+    DetectionResult r;
+    /* period = 30 samples @ 20 Hz = 1.5 s -> ~0.667 Hz */
+    feed_pattern(&d, &r, 8, 12, 18);
+    CHECK(r.characterization == SgCharIntermittent, "duty-cycled reader -> intermittent");
+    CHECK(r.poll_hz > 0.45f && r.poll_hz < 0.9f, "poll rate estimate near 0.667 Hz");
+}
+
 static void test_sim_sensor(void) {
     printf("test_sim_sensor\n");
     CHECK(field_sensor_is_simulated(), "SIM build reports simulated");
@@ -123,6 +198,11 @@ int main(void) {
     test_present_and_proximity();
     test_hysteresis();
     test_characterization();
+    test_confidence();
+    test_distance_estimate();
+    test_sensitivity();
+    test_drift_compensation();
+    test_poll_rate();
     test_sim_sensor();
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

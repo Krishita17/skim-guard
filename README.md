@@ -59,6 +59,16 @@ anything yourself**. Detecting rogue readers is a real physical-security control
   (sound **+ haptic vibration + proportional LED**: green = clear, red brightens
   toward the reader).
 - **Warmer/colder trend** and **steady-vs-intermittent** field characterization.
+- **Detection-confidence score** (SNR-based, noise-relative) and a rolled-up
+  **room verdict**: `CLEAR → TRACE → ACTIVE`.
+- **Approximate distance estimate** in cm — inverts the field model against a
+  nominal reference reader (honestly flagged as *uncalibrated*, sub-cm typical
+  error in the eval).
+- **Poll-rate estimation** for intermittent readers — reports the emitter's
+  polling cadence in **Hz**.
+- **Baseline drift auto-compensation** — slowly re-learns the RF floor while
+  clear, so thermal/environmental drift doesn't accumulate into a false positive.
+- **Sensitivity presets** (long-press Down): **High / Med / Low**.
 - **Three modes** (Left/Right):
   - **Sweep** — free-hand hunt with waveform, meter, and clicks.
   - **A/B** — guided *clean box → suspect box* comparison for a decisive contrast.
@@ -90,6 +100,11 @@ with it. Being explicit about which is which:
 | Haptic + LED + sound feedback | yes | yes | parity (3-level cycle) |
 | Watch / wake-on-detection mode | yes | yes | parity |
 | Steady vs intermittent characterization | yes (fingerprint) | yes (lighter) | parity-ish |
+| Sensitivity presets | — | yes (High/Med/Low) | SkimGuard addition |
+| **SNR detection-confidence score + verdict** | — | yes | **SkimGuard's own** |
+| **Approximate distance estimate (cm)** | — | yes (uncalibrated) | **SkimGuard's own** |
+| **Poll-rate (Hz) estimation for intermittent readers** | — | yes | **SkimGuard's own** |
+| **Baseline drift auto-compensation** | — | yes | **SkimGuard's own** |
 | **Guided A/B (clean vs compromised) mode** | — | yes | **SkimGuard's own** |
 | **SD logs in the offline-eval CSV schema** | CSV export | yes, schema-matched | **feeds the study directly** |
 | **Reproducible measurement study + charts** | — | yes | **SkimGuard's differentiator** |
@@ -169,7 +184,8 @@ Full script, setup, controls, and failure recovery: [`docs/demo_guide.md`](docs/
 | OK (short) | Sweep: recalibrate here · A/B: next step · Watch: arm/disarm |
 | OK (long) | reset session: fresh baseline, clear peak-hold + waveform |
 | Up | cycle feedback: **mute → snd → snd+led** (sound/haptic/LED) |
-| Down | toggle **SD session logging** |
+| Down (short) | toggle **SD session logging** |
+| Down (long) | cycle **sensitivity**: High → Med → Low |
 | Back | exit |
 
 ---
@@ -220,6 +236,7 @@ Everything is seeded, so a clean clone reproduces the exact numbers.
 | Marginal range (P ≥ 50%) | 12.5 cm |
 | True-positive rate (active reader @ 4 cm) | 100% |
 | Overall false-positive rate (benign NFC) | 0.6% |
+| Distance-estimate mean abs. error (nominal reader) | ~0.5 cm |
 | Intermittent tracking precision / recall | 0.77 / 1.00 |
 
 Full table and per-device breakdown: [`docs/eval_results.md`](docs/eval_results.md).
@@ -227,9 +244,8 @@ Full table and per-device breakdown: [`docs/eval_results.md`](docs/eval_results.
 | | |
 |---|---|
 | ![field vs distance](figures/field_vs_distance.png) | ![detection range](figures/detection_range.png) |
-| ![false positives](figures/false_positive.png) | ![clean vs compromised](figures/clean_vs_compromised.png) |
-
-![intermittent tracking](figures/intermittent_tracking.png)
+| ![false positives](figures/false_positive.png) | ![distance estimation](figures/distance_estimation.png) |
+| ![clean vs compromised](figures/clean_vs_compromised.png) | ![intermittent tracking](figures/intermittent_tracking.png) |
 
 > The numbers above come from the simulator's field model — they characterize the
 > **detector logic** end-to-end and reproduce anywhere. Swap in your own captured

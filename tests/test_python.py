@@ -101,5 +101,72 @@ def test_intermittent_characterization():
     assert "intermittent" in chars
 
 
+def test_confidence_tracks_signal():
+    det = Detector()
+    det.force_calibration(18.0, 6.0)
+    m = FieldModel(FieldParams(noise_sigma=1.0), rng=np.random.default_rng(11))
+    absent = det.push(18.0).confidence_pct
+    near = None
+    for r in tg.static_distance_trace(m, 3.0, duration_s=2.0).reading:
+        near = det.push(r).confidence_pct
+    assert absent < 5.0
+    assert near > 50.0
+
+
+def test_distance_estimate_monotonic_and_valid():
+    near, vn = Detector.estimate_distance_cm(600.0)
+    far, vf = Detector.estimate_distance_cm(80.0)
+    assert vn and vf
+    assert near < far
+    _, v_tiny = Detector.estimate_distance_cm(1.0)
+    assert not v_tiny
+
+
+def test_distance_estimate_roughly_matches_truth():
+    """For the nominal reference reader, the estimate should track true distance."""
+    m = FieldModel(FieldParams(noise_sigma=0.0), rng=np.random.default_rng(12))
+    for true_d in (4.0, 7.0, 10.0):
+        det = Detector()
+        det.force_calibration(18.0, 6.0)
+        est = None
+        for r in tg.static_distance_trace(m, true_d, duration_s=2.0).reading:
+            st = det.push(r)
+            if st.distance_valid:
+                est = st.distance_cm_est
+        assert est is not None
+        assert abs(est - true_d) < 3.5  # within a few cm of ground truth
+
+
+def test_sensitivity_changes_threshold():
+    lo = Detector(); lo.force_calibration(18.0, 6.0); lo.set_sensitivity(PARAMS["SENS_LOW"])
+    hi = Detector(); hi.force_calibration(18.0, 6.0); hi.set_sensitivity(PARAMS["SENS_HIGH"])
+    assert lo.on_threshold > hi.on_threshold
+
+
+def test_drift_compensation_suppresses_slow_rise():
+    det = Detector()
+    det.force_calibration(18.0, 6.0)
+    ever = False
+    for i in range(400):
+        v = 18.0 + 42.0 * (i / 400.0)
+        if det.push(v).present:
+            ever = True
+    assert not ever
+
+
+def test_poll_rate_estimate():
+    m = FieldModel(FieldParams(), rng=np.random.default_rng(13))
+    det = Detector()
+    det.force_calibration(18.0, 6.0)
+    tr = tg.intermittent_trace(m, distance_cm=6.0, duration_s=14.0, on_s=0.6, off_s=0.9)
+    poll = 0.0
+    for r in tr.reading:
+        st = det.push(r)
+        if st.poll_hz > 0:
+            poll = st.poll_hz
+    # period 1.5 s -> ~0.667 Hz
+    assert 0.4 < poll < 0.95
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

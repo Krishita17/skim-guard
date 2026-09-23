@@ -115,26 +115,27 @@ def ui_states():
 
     # 1) Idle / quiet
     fig, ax = plt.subplots(figsize=(3.2, 1.9))
-    ink = _screen(ax, "State: idle — no reader field")
+    ink = _screen(ax, "State: idle — verdict CLEAR")
     _header(ax, ink, "Sweep")
-    ax.text(4, 24, "CLEAR - no reader field", fontsize=7.5, color=ink)
-    ax.text(124, 24, "0%", fontsize=8, color=ink, ha="right")
+    ax.text(4, 24, "CLEAR", fontsize=7.5, color=ink)
+    ax.text(124, 24, "c0%", fontsize=8, color=ink, ha="right")
     _waveform(ax, ink, 4, 27, 120, 12, [0.02] * 30)
     _meter(ax, ink, 4, 43, 120, 9, 0.03)
-    ax.text(4, 61, "mute pk0%", fontsize=7, color=ink)
+    ax.text(4, 61, "mute Med pk0%", fontsize=7, color=ink)
     paths += plots.save(fig, FIG_DIR, "ui_idle")
 
     # 2) Locked on
     fig, ax = plt.subplots(figsize=(3.2, 1.9))
-    ink = _screen(ax, "State: locked on — closing in")
+    ink = _screen(ax, "State: ACTIVE — closing in")
     _header(ax, ink, "Sweep")
-    ax.text(4, 24, "READER  warmer >>>", fontsize=7.5, color=ink, fontweight="bold")
-    ax.text(124, 24, "78%", fontsize=8, color=ink, ha="right", fontweight="bold")
+    ax.text(4, 24, "ACTIVE  warmer >>>", fontsize=7.5, color=ink, fontweight="bold")
+    ax.text(124, 24, "c78%", fontsize=8, color=ink, ha="right", fontweight="bold")
     x = np.linspace(0, 1, 30)
     wave = 0.15 + 0.7 * x + 0.05 * np.sin(x * 22)
     _waveform(ax, ink, 4, 27, 120, 12, np.clip(wave, 0, 1))
     _meter(ax, ink, 4, 43, 120, 9, 0.78, peak_frac=0.82)
-    ax.text(4, 61, "snd+led LOG pk82% steady", fontsize=6.3, color=ink)
+    ax.text(4, 61, "snd+led LOG Med pk82%", fontsize=6.3, color=ink)
+    ax.text(124, 61, "~4cm", fontsize=6.5, color=ink, ha="right")
     paths += plots.save(fig, FIG_DIR, "ui_locked")
 
     # 3) Verdict / watch alert

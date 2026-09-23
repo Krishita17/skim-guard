@@ -210,6 +210,60 @@ def study_clean_vs_compromised(rng, baseline):
                 compromised_max_prox=float(np.max(prox_comp)), figures=paths)
 
 
+# --- Study 5: distance-estimation accuracy -----------------------------------
+def study_distance_estimation(rng, baseline, noise):
+    """How well the uncalibrated distance estimate tracks true distance for the
+    nominal reference reader. This is SkimGuard's own analytical feature."""
+    true_d = np.linspace(1.0, 12.0, 34)
+    trials = 40
+
+    means, stds = [], []
+    abs_errors = []  # per-trial |est - true|, the honest error metric
+    for d in true_d:
+        ests = []
+        for _ in range(trials):
+            # Reader-to-reader variation: the estimate assumes a NOMINAL reader,
+            # so real power/coil spread is the honest source of error (the model
+            # is not calibrated to each specific reader).
+            params = FieldParams(
+                power=float(rng.normal(1.0, 0.20)),
+                coil_radius_cm=float(rng.normal(3.0, 0.30)),
+                noise_floor=TEST_READER.noise_floor, noise_sigma=TEST_READER.noise_sigma)
+            params.power = max(0.4, params.power)
+            params.coil_radius_cm = max(2.0, params.coil_radius_cm)
+            model = FieldModel(params, rng=rng)
+            det = Detector(); det.force_calibration(baseline, noise)
+            last = None
+            for r in tg.static_distance_trace(model, d, duration_s=1.2).reading:
+                st = det.push(r)
+                if st.distance_valid:
+                    last = st.distance_cm_est
+            if last is not None:
+                ests.append(last)
+                abs_errors.append(abs(last - d))
+        means.append(np.mean(ests) if ests else np.nan)
+        stds.append(np.std(ests) if ests else 0.0)
+    means, stds = np.array(means), np.array(stds)
+
+    mae = float(np.mean(abs_errors)) if abs_errors else float("nan")
+
+    fig, ax = plots.plt.subplots(figsize=(6.6, 4.2))
+    lim = 13
+    ax.plot([0, lim], [0, lim], color=plots.MUTED, ls="--", lw=1.2, label="ideal (est = true)")
+    ax.plot(true_d, means, color=plots.PURPLE, lw=2.0, marker="o", ms=3,
+            label="estimated distance")
+    ax.fill_between(true_d, means - stds, means + stds, color=plots.PURPLE, alpha=0.15)
+    ax.set_xlabel("True distance (cm)")
+    ax.set_ylabel("Estimated distance (cm)")
+    ax.set_title(f"Distance-estimation accuracy (MAE ≈ {mae:.1f} cm)")
+    ax.set_xlim(0, lim); ax.set_ylim(0, lim)
+    ax.legend()
+    paths = plots.save(fig, FIG_DIR, "distance_estimation")
+
+    return dict(true_distance=true_d.tolist(), est_distance=means.tolist(),
+                mae_cm=round(mae, 2), figures=paths)
+
+
 # --- Extra: intermittent tracking --------------------------------------------
 def study_intermittent(rng, baseline, noise):
     model = FieldModel(TEST_READER, rng=rng)
@@ -244,7 +298,7 @@ def study_intermittent(rng, baseline, noise):
 
 def _write_markdown(results):
     r2 = results["detection_range"]; fp = results["false_positives"]
-    im = results["intermittent"]
+    im = results["intermittent"]; de = results["distance_estimation"]
     lines = [
         "# SkimGuard — Evaluation Results",
         "",
@@ -260,6 +314,7 @@ def _write_markdown(results):
         f"| Marginal range (P ≥ 50%) | {r2['range_50pct_cm']} cm |",
         f"| True-positive rate (active reader @ 4 cm) | {fp['true_positive_rate']*100:.0f}% |",
         f"| Overall false-positive rate (benign NFC) | {fp['overall_fp_rate']*100:.1f}% |",
+        f"| Distance-estimate mean abs. error (nominal reader) | {de['mae_cm']} cm |",
         f"| Intermittent tracking precision / recall | {im['precision']} / {im['recall']} |",
         "",
         "## False positives by benign device",
@@ -276,6 +331,7 @@ def _write_markdown(results):
         "![Field vs distance](../figures/field_vs_distance.png)",
         "![Detection range](../figures/detection_range.png)",
         "![False positives](../figures/false_positive.png)",
+        "![Distance estimation](../figures/distance_estimation.png)",
         "![Clean vs compromised](../figures/clean_vs_compromised.png)",
         "![Intermittent tracking](../figures/intermittent_tracking.png)",
         "",
@@ -309,7 +365,9 @@ def main():
     results["false_positives"] = study_false_positives(rng, baseline, noise)
     print("[eval] 4/5 clean vs compromised ...")
     results["clean_vs_compromised"] = study_clean_vs_compromised(rng, baseline)
-    print("[eval] 5/5 intermittent tracking ...")
+    print("[eval] 5/6 distance estimation ...")
+    results["distance_estimation"] = study_distance_estimation(rng, baseline, noise)
+    print("[eval] 6/6 intermittent tracking ...")
     results["intermittent"] = study_intermittent(rng, baseline, noise)
 
     os.makedirs(os.path.dirname(RESULTS_JSON), exist_ok=True)

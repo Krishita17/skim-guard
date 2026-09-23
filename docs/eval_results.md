@@ -12,7 +12,8 @@ Random seed: **7**  ·  test reader power: **1.0**
 | Marginal range (P ≥ 50%) | 12.5 cm |
 | True-positive rate (active reader @ 4 cm) | 100% |
 | Overall false-positive rate (benign NFC) | 0.6% |
-| Intermittent tracking precision / recall | 0.766 / 1.0 |
+| Distance-estimate mean abs. error (nominal reader) | 0.52 cm |
+| Intermittent tracking precision / recall | 0.758 / 1.0 |
 
 ## False positives by benign device
 
@@ -28,6 +29,7 @@ Random seed: **7**  ·  test reader power: **1.0**
 ![Field vs distance](../figures/field_vs_distance.png)
 ![Detection range](../figures/detection_range.png)
 ![False positives](../figures/false_positive.png)
+![Distance estimation](../figures/distance_estimation.png)
 ![Clean vs compromised](../figures/clean_vs_compromised.png)
 ![Intermittent tracking](../figures/intermittent_tracking.png)
 

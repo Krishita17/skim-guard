@@ -10,12 +10,13 @@ App(
     stack_size=2 * 1024,
     fap_category="NFC",
     fap_author="Krishita Sanjay Choksi",
-    fap_version="1.1",
+    fap_version="1.2",
     fap_description=(
         "Passive 13.56 MHz NFC reader (skimmer) field detector. "
         "Receive-only: it senses the RF field an active reader emits and never "
         "transmits. EMF meter, live waveform, peak-hold, geiger clicks, "
-        "haptic+LED feedback, SD logging, plus A/B and watch modes."
+        "haptic+LED feedback, confidence + distance + poll-rate readouts, drift "
+        "compensation, sensitivity presets, SD logging, plus A/B and watch modes."
     ),
     sources=["src/*.c"],
     # No fap_icon: uses the default category icon. Add one under src/ and set

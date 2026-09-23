@@ -65,6 +65,7 @@ typedef struct {
     bool ab_clean_seen_quiet;
 
     FeedbackLevel feedback;
+    uint8_t sens_idx; /* 0=High, 1=Med, 2=Low */
     bool speaker_held;
     float click_accum_ms;
     int click_hold_ticks;
@@ -150,8 +151,41 @@ static void wave_push(SkimGuard* sg, float proximity_pct) {
     if(proximity_pct > sg->peak_prox) sg->peak_prox = proximity_pct;
 }
 
+static float sens_mult_of(uint8_t idx) {
+    switch(idx) {
+    case 0:
+        return SG_SENS_HIGH;
+    case 2:
+        return SG_SENS_LOW;
+    default:
+        return SG_SENS_MED;
+    }
+}
+
+static const char* sens_name(uint8_t idx) {
+    switch(idx) {
+    case 0:
+        return "High";
+    case 2:
+        return "Low";
+    default:
+        return "Med";
+    }
+}
+
+static void apply_sensitivity(SkimGuard* sg) {
+    detector_set_sensitivity(&sg->detector, sens_mult_of(sg->sens_idx));
+}
+
+static const char* verdict_word(float confidence_pct) {
+    if(confidence_pct >= 50.0f) return "ACTIVE";
+    if(confidence_pct >= 10.0f) return "TRACE";
+    return "CLEAR";
+}
+
 static void reset_session(SkimGuard* sg) {
     detector_init(&sg->detector);
+    apply_sensitivity(sg);
     sg->wave_len = 0;
     sg->wave_head = 0;
     sg->peak_prox = 0.0f;
@@ -257,17 +291,16 @@ static void draw_waveform(Canvas* c, const SkimGuard* sg, int x, int y, int w, i
     }
 }
 
-static void draw_flags(Canvas* c, const SkimGuard* sg, const char* extra) {
+static void draw_flags(Canvas* c, const SkimGuard* sg) {
     char buf[40];
     snprintf(
         buf,
         sizeof(buf),
-        "%s%s pk%d%%%s%s",
+        "%s%s %s pk%d%%",
         feedback_tag(sg->feedback),
         logger_is_active(sg->logger) ? " LOG" : "",
-        (int)(sg->peak_prox + 0.5f),
-        extra && extra[0] ? " " : "",
-        extra ? extra : "");
+        sens_name(sg->sens_idx),
+        (int)(sg->peak_prox + 0.5f));
     canvas_set_font(c, FontSecondary);
     canvas_draw_str(c, 2, 63, buf);
 }
@@ -277,24 +310,37 @@ static void draw_sweep(Canvas* c, const SkimGuard* sg, const DetectionResult* r)
     canvas_set_font(c, FontSecondary);
 
     if(!r->present) {
-        canvas_draw_str(c, 2, 23, "CLEAR - no reader field");
+        snprintf(line, sizeof(line), "%s", verdict_word(r->confidence_pct));
+        canvas_draw_str(c, 2, 23, line);
     } else {
         const char* tr = r->trend == SgTrendWarmer ? "warmer >>>" :
                          r->trend == SgTrendColder ? "<<< colder" :
                                                      "holding";
-        snprintf(line, sizeof(line), "READER  %s", tr);
+        snprintf(line, sizeof(line), "%s %s", verdict_word(r->confidence_pct), tr);
         canvas_draw_str(c, 2, 23, line);
     }
-    snprintf(line, sizeof(line), "%d%%", (int)(r->proximity_pct + 0.5f));
+    /* confidence readout, right of the status line */
+    snprintf(line, sizeof(line), "c%d%%", (int)(r->confidence_pct + 0.5f));
     canvas_draw_str_aligned(c, 126, 23, AlignRight, AlignBottom, line);
 
     draw_waveform(c, sg, 2, 26, 124, 14);
     draw_meter(c, 2, 43, 124, 10, r->proximity_pct, sg->peak_prox);
 
-    const char* ch = r->characterization == SgCharSteady        ? "steady" :
-                     r->characterization == SgCharIntermittent ? "intermit" :
-                                                                  "";
-    draw_flags(c, sg, ch);
+    draw_flags(c, sg);
+
+    /* bottom-right: distance estimate > poll rate > characterization */
+    line[0] = '\0';
+    if(r->present && r->distance_valid) {
+        snprintf(line, sizeof(line), "~%dcm", (int)(r->distance_cm_est + 0.5f));
+    } else if(r->poll_hz > 0.0f) {
+        snprintf(line, sizeof(line), "%d.%01dHz", (int)r->poll_hz,
+                 (int)((r->poll_hz - (int)r->poll_hz) * 10.0f));
+    } else if(r->characterization == SgCharSteady) {
+        snprintf(line, sizeof(line), "steady");
+    } else if(r->characterization == SgCharIntermittent) {
+        snprintf(line, sizeof(line), "intermit");
+    }
+    if(line[0]) canvas_draw_str_aligned(c, 126, 63, AlignRight, AlignBottom, line);
 }
 
 static void draw_ab(Canvas* c, const SkimGuard* sg, const DetectionResult* r) {
@@ -329,7 +375,7 @@ static void draw_watch(Canvas* c, const SkimGuard* sg, const DetectionResult* r)
         canvas_draw_str(c, 2, 38, "OK: arm sentry");
     }
     draw_meter(c, 2, 43, 124, 8, r->proximity_pct, sg->peak_prox);
-    draw_flags(c, sg, sg->watch_armed ? "armed" : "idle");
+    draw_flags(c, sg);
 }
 
 static void draw_cb(Canvas* canvas, void* ctx) {
@@ -421,7 +467,12 @@ static void handle_input(SkimGuard* sg, const InputEvent* e) {
         }
         break;
     case InputKeyDown:
-        toggle_logging(sg);
+        if(is_long) {
+            sg->sens_idx = (uint8_t)((sg->sens_idx + 1) % 3);
+            apply_sensitivity(sg);
+        } else {
+            toggle_logging(sg);
+        }
         break;
     default:
         break;
@@ -441,9 +492,11 @@ static SkimGuard* skimguard_alloc(void) {
     sg->logger = logger_alloc();
     sg->mode = ModeSweep;
     sg->feedback = FbSound;
+    sg->sens_idx = 1; /* Med */
     sg->running = true;
 
     detector_init(&sg->detector);
+    apply_sensitivity(sg);
 
     sg->view_port = view_port_alloc();
     view_port_draw_callback_set(sg->view_port, draw_cb, sg);
